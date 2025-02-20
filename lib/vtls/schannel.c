@@ -55,6 +55,7 @@
 #include "multiif.h"
 #include "version_win32.h"
 #include "rand.h"
+#include "strparse.h"
 
 /* The last #include file should be: */
 #include "curl_memory.h"
@@ -73,10 +74,11 @@
 
 /* ALPN requires version 8.1 of the Windows SDK, which was
    shipped with Visual Studio 2013, aka _MSC_VER 1800:
-
-   https://technet.microsoft.com/en-us/library/hh831771%28v=ws.11%29.aspx
+     https://technet.microsoft.com/en-us/library/hh831771%28v=ws.11%29.aspx
+   Or mingw-w64 9.0 or upper.
 */
-#if defined(_MSC_VER) && (_MSC_VER >= 1800) && !defined(_USING_V110_SDK71_)
+#if (defined(__MINGW32__) && __MINGW64_VERSION_MAJOR >= 9) || \
+  (defined(_MSC_VER) && (_MSC_VER >= 1800) && !defined(_USING_V110_SDK71_))
 #  define HAS_ALPN_SCHANNEL
 #endif
 
@@ -344,9 +346,9 @@ static const struct algo algs[]= {
 };
 
 static int
-get_alg_id_by_name(char *name)
+get_alg_id_by_name(const char *name)
 {
-  char *nameEnd = strchr(name, ':');
+  const char *nameEnd = strchr(name, ':');
   size_t n = nameEnd ? (size_t)(nameEnd - name) : strlen(name);
   int i;
 
@@ -363,12 +365,13 @@ static CURLcode
 set_ssl_ciphers(SCHANNEL_CRED *schannel_cred, char *ciphers,
                 ALG_ID *algIds)
 {
-  char *startCur = ciphers;
+  const char *startCur = ciphers;
   int algCount = 0;
   while(startCur && (0 != *startCur) && (algCount < NUM_CIPHERS)) {
-    long alg = strtol(startCur, 0, 0);
-    if(!alg)
+    curl_off_t alg;
+    if(Curl_str_number(&startCur, &alg, INT_MAX) || !alg)
       alg = get_alg_id_by_name(startCur);
+
     if(alg)
       algIds[algCount++] = (ALG_ID)alg;
     else if(!strncmp(startCur, "USE_STRONG_CRYPTO",
@@ -902,17 +905,26 @@ schannel_connect_step1(struct Curl_cfilter *cf, struct Curl_easy *data)
           "connect to some servers due to lack of SNI, algorithms, etc.");
   }
 
+  {
 #ifdef HAS_ALPN_SCHANNEL
-  /* ALPN is only supported on Windows 8.1 / Server 2012 R2 and above.
-     Also it does not seem to be supported for WINE, see curl bug #983. */
-  backend->use_alpn = connssl->alpn &&
-    !GetProcAddress(GetModuleHandle(TEXT("ntdll")),
-                    "wine_get_version") &&
-    curlx_verify_windows_version(6, 3, 0, PLATFORM_WINNT,
-                                 VERSION_GREATER_THAN_EQUAL);
+    bool wine;
+#ifdef CURL_WINDOWS_UWP
+    /* GetModuleHandle() not available for UWP.
+       Assume no WINE because WINE has no UWP support. */
+    wine = FALSE;
 #else
-  backend->use_alpn = FALSE;
+    wine = !!GetProcAddress(GetModuleHandle(TEXT("ntdll")),
+                            "wine_get_version");
 #endif
+    /* ALPN is only supported on Windows 8.1 / Server 2012 R2 and above.
+       Also it does not seem to be supported for WINE, see curl bug #983. */
+    backend->use_alpn = connssl->alpn && !wine &&
+      curlx_verify_windows_version(6, 3, 0, PLATFORM_WINNT,
+                                   VERSION_GREATER_THAN_EQUAL);
+#else
+    backend->use_alpn = FALSE;
+#endif
+  }
 
 #ifdef _WIN32_WCE
 #ifdef HAS_MANUAL_VERIFY_API
@@ -1636,16 +1648,12 @@ schannel_connect_step3(struct Curl_cfilter *cf, struct Curl_easy *data)
   return CURLE_OK;
 }
 
-static CURLcode
-schannel_connect_common(struct Curl_cfilter *cf,
-                        struct Curl_easy *data,
-                        bool nonblocking, bool *done)
+static CURLcode schannel_connect(struct Curl_cfilter *cf,
+                                 struct Curl_easy *data,
+                                 bool *done)
 {
-  CURLcode result;
   struct ssl_connect_data *connssl = cf->ctx;
-  curl_socket_t sockfd = Curl_conn_cf_get_socket(cf, data);
-  timediff_t timeout_ms;
-  int what;
+  CURLcode result;
 
   /* check if the connection has already been established */
   if(ssl_connection_complete == connssl->state) {
@@ -1653,73 +1661,19 @@ schannel_connect_common(struct Curl_cfilter *cf,
     return CURLE_OK;
   }
 
+  *done = FALSE;
+
   if(ssl_connect_1 == connssl->connecting_state) {
-    /* check out how much more time we are allowed */
-    timeout_ms = Curl_timeleft(data, NULL, TRUE);
-
-    if(timeout_ms < 0) {
-      /* no need to continue if time already is up */
-      failf(data, "SSL/TLS connection timeout");
-      return CURLE_OPERATION_TIMEDOUT;
-    }
-
     result = schannel_connect_step1(cf, data);
     if(result)
       return result;
   }
 
-  while(ssl_connect_2 == connssl->connecting_state) {
-
-    /* check out how much more time we are allowed */
-    timeout_ms = Curl_timeleft(data, NULL, TRUE);
-
-    if(timeout_ms < 0) {
-      /* no need to continue if time already is up */
-      failf(data, "SSL/TLS connection timeout");
-      return CURLE_OPERATION_TIMEDOUT;
-    }
-
-    /* if ssl is expecting something, check if it is available. */
-    if(connssl->io_need) {
-
-      curl_socket_t writefd = (connssl->io_need & CURL_SSL_IO_NEED_SEND) ?
-        sockfd : CURL_SOCKET_BAD;
-      curl_socket_t readfd = (connssl->io_need & CURL_SSL_IO_NEED_RECV) ?
-        sockfd : CURL_SOCKET_BAD;
-
-      what = Curl_socket_check(readfd, CURL_SOCKET_BAD, writefd,
-                               nonblocking ? 0 : timeout_ms);
-      if(what < 0) {
-        /* fatal error */
-        failf(data, "select/poll on SSL/TLS socket, errno: %d", SOCKERRNO);
-        return CURLE_SSL_CONNECT_ERROR;
-      }
-      else if(0 == what) {
-        if(nonblocking) {
-          *done = FALSE;
-          return CURLE_OK;
-        }
-        else {
-          /* timeout */
-          failf(data, "SSL/TLS connection timeout");
-          return CURLE_OPERATION_TIMEDOUT;
-        }
-      }
-      /* socket is readable or writable */
-    }
-
-    /* Run transaction, and return to the caller if it failed or if
-     * this connection is part of a multi handle and this loop would
-     * execute again. This permits the owner of a multi handle to
-     * abort a connection attempt before step2 has completed while
-     * ensuring that a client using select() or epoll() will always
-     * have a valid fdset to wait on.
-     */
+  if(ssl_connect_2 == connssl->connecting_state) {
     result = schannel_connect_step2(cf, data);
-    if(result || (nonblocking && (ssl_connect_2 == connssl->connecting_state)))
+    if(result)
       return result;
-
-  } /* repeat step2 until all transactions are done. */
+  }
 
   if(ssl_connect_3 == connssl->connecting_state) {
     result = schannel_connect_step3(cf, data);
@@ -1746,11 +1700,6 @@ schannel_connect_common(struct Curl_cfilter *cf,
 
     *done = TRUE;
   }
-  else
-    *done = FALSE;
-
-  /* reset our connection state machine */
-  connssl->connecting_state = ssl_connect_1;
 
   return CURLE_OK;
 }
@@ -2123,7 +2072,7 @@ schannel_recv(struct Curl_cfilter *cf, struct Curl_easy *data,
         connssl->connecting_state = ssl_connect_2;
         connssl->io_need = CURL_SSL_IO_NEED_SEND;
         backend->recv_renegotiating = TRUE;
-        *err = schannel_connect_common(cf, data, FALSE, &done);
+        *err = schannel_connect(cf, data, &done);
         backend->recv_renegotiating = FALSE;
         if(*err) {
           infof(data, "schannel: renegotiation failed");
@@ -2232,28 +2181,6 @@ cleanup:
     *err = CURLE_OK;
 
   return *err ? -1 : 0;
-}
-
-static CURLcode schannel_connect_nonblocking(struct Curl_cfilter *cf,
-                                             struct Curl_easy *data,
-                                             bool *done)
-{
-  return schannel_connect_common(cf, data, TRUE, done);
-}
-
-static CURLcode schannel_connect(struct Curl_cfilter *cf,
-                                 struct Curl_easy *data)
-{
-  CURLcode result;
-  bool done = FALSE;
-
-  result = schannel_connect_common(cf, data, FALSE, &done);
-  if(result)
-    return result;
-
-  DEBUGASSERT(done);
-
-  return CURLE_OK;
 }
 
 static bool schannel_data_pending(struct Curl_cfilter *cf,
@@ -2794,7 +2721,6 @@ const struct Curl_ssl Curl_ssl_schannel = {
   schannel_random,                   /* random */
   NULL,                              /* cert_status_request */
   schannel_connect,                  /* connect */
-  schannel_connect_nonblocking,      /* connect_nonblocking */
   Curl_ssl_adjust_pollset,           /* adjust_pollset */
   schannel_get_internals,            /* get_internals */
   schannel_close,                    /* close_one */

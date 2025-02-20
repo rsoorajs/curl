@@ -570,8 +570,9 @@ CURLcode Curl_pretransfer(struct Curl_easy *data)
   data->state.followlocation = 0; /* reset the location-follow counter */
   data->state.this_is_a_follow = FALSE; /* reset this */
   data->state.errorbuf = FALSE; /* no error has occurred */
-  data->state.httpwant = data->set.httpwant;
-  data->state.httpversion = 0;
+#ifndef CURL_DISABLE_HTTP
+  Curl_http_neg_init(data, &data->state.http_neg);
+#endif
   data->state.authproblem = FALSE;
   data->state.authhost.want = data->set.httpauth;
   data->state.authproxy.want = data->set.proxyauth;
@@ -877,6 +878,11 @@ CURLcode Curl_xfer_write_resp(struct Curl_easy *data,
   CURL_TRC_WRITE(data, "xfer_write_resp(len=%zu, eos=%d) -> %d",
                  blen, is_eos, result);
   return result;
+}
+
+bool Curl_xfer_write_is_paused(struct Curl_easy *data)
+{
+  return Curl_cwriter_is_paused(data);
 }
 
 CURLcode Curl_xfer_write_resp_hd(struct Curl_easy *data,

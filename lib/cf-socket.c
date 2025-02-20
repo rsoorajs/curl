@@ -742,7 +742,7 @@ static CURLcode bindlocal(struct Curl_easy *data, struct connectdata *conn,
                Curl_printable_address. The latter returns only numeric scope
                IDs and the former returns none at all. So the scope ID, if
                present, is known to be numeric */
-            size_t scope_id;
+            curl_off_t scope_id;
             if(Curl_str_number((const char **)&scope_ptr, &scope_id, UINT_MAX))
               return CURLE_UNSUPPORTED_PROTOCOL;
             si6->sin6_scope_id = (unsigned int)scope_id;
@@ -974,28 +974,28 @@ static CURLcode cf_socket_ctx_init(struct cf_socket_ctx *ctx,
 
 #ifdef DEBUGBUILD
   {
-    char *p = getenv("CURL_DBG_SOCK_WBLOCK");
+    const char *p = getenv("CURL_DBG_SOCK_WBLOCK");
     if(p) {
-      long l = strtol(p, NULL, 10);
-      if(l >= 0 && l <= 100)
+      curl_off_t l;
+      if(!Curl_str_number(&p, &l, 100))
         ctx->wblock_percent = (int)l;
     }
     p = getenv("CURL_DBG_SOCK_WPARTIAL");
     if(p) {
-      long l = strtol(p, NULL, 10);
-      if(l >= 0 && l <= 100)
+      curl_off_t l;
+      if(!Curl_str_number(&p, &l, 100))
         ctx->wpartial_percent = (int)l;
     }
     p = getenv("CURL_DBG_SOCK_RBLOCK");
     if(p) {
-      long l = strtol(p, NULL, 10);
-      if(l >= 0 && l <= 100)
+      curl_off_t l;
+      if(!Curl_str_number(&p, &l, 100))
         ctx->rblock_percent = (int)l;
     }
     p = getenv("CURL_DBG_SOCK_RMAX");
     if(p) {
-      long l = strtol(p, NULL, 10);
-      if(l >= 0)
+      curl_off_t l;
+      if(!Curl_str_number(&p, &l, CURL_OFF_T_MAX))
         ctx->recv_max = (size_t)l;
     }
   }
@@ -1304,7 +1304,7 @@ static int do_connect(struct Curl_cfilter *cf, struct Curl_easy *data,
 
 static CURLcode cf_tcp_connect(struct Curl_cfilter *cf,
                                struct Curl_easy *data,
-                               bool blocking, bool *done)
+                               bool *done)
 {
   struct cf_socket_ctx *ctx = cf->ctx;
   CURLcode result = CURLE_COULDNT_CONNECT;
@@ -1315,9 +1315,6 @@ static CURLcode cf_tcp_connect(struct Curl_cfilter *cf,
     *done = TRUE;
     return CURLE_OK;
   }
-
-  if(blocking)
-    return CURLE_UNSUPPORTED_PROTOCOL;
 
   *done = FALSE; /* a negative world view is best */
   if(ctx->sock == CURL_SOCKET_BAD) {
@@ -1889,12 +1886,11 @@ static CURLcode cf_udp_setup_quic(struct Curl_cfilter *cf,
 
 static CURLcode cf_udp_connect(struct Curl_cfilter *cf,
                                struct Curl_easy *data,
-                               bool blocking, bool *done)
+                               bool *done)
 {
   struct cf_socket_ctx *ctx = cf->ctx;
   CURLcode result = CURLE_COULDNT_CONNECT;
 
-  (void)blocking;
   if(cf->connected) {
     *done = TRUE;
     return CURLE_OK;
@@ -2099,7 +2095,7 @@ static void cf_tcp_set_accepted_remote_ip(struct Curl_cfilter *cf,
 
 static CURLcode cf_tcp_accept_connect(struct Curl_cfilter *cf,
                                       struct Curl_easy *data,
-                                      bool blocking, bool *done)
+                                      bool *done)
 {
   struct cf_socket_ctx *ctx = cf->ctx;
 #ifdef USE_IPV6
@@ -2115,7 +2111,6 @@ static CURLcode cf_tcp_accept_connect(struct Curl_cfilter *cf,
 
   /* we start accepted, if we ever close, we cannot go on */
   (void)data;
-  (void)blocking;
   if(cf->connected) {
     *done = TRUE;
     return CURLE_OK;
