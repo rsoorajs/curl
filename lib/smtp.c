@@ -215,7 +215,7 @@ static bool smtp_endofresp(struct Curl_easy *data, struct connectdata *conn,
      only send the response code instead as per Section 4.2. */
   if(line[3] == ' ' || len == 5) {
     char tmpline[6];
-    size_t code;
+    curl_off_t code;
     const char *p = tmpline;
     result = TRUE;
     memcpy(tmpline, line, (len == 5 ? 5 : 3));
@@ -401,7 +401,6 @@ static CURLcode smtp_perform_upgrade_tls(struct Curl_easy *data)
       goto out;
     /* Change the connection handler and SMTP state */
     conn->handler = &Curl_handler_smtps;
-    conn->bits.tls_upgraded = TRUE;
   }
 
   DEBUGASSERT(!smtpc->ssldone);
@@ -1614,10 +1613,8 @@ static CURLcode smtp_setup_connection(struct Curl_easy *data,
 {
   CURLcode result;
 
-  /* Clear the TLS upgraded flag */
-  conn->bits.tls_upgraded = FALSE;
-
   /* Initialise the SMTP layer */
+  (void)conn;
   result = smtp_init(data);
   CURL_TRC_SMTP(data, "smtp_setup_connection() -> %d", result);
   return result;
