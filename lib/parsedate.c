@@ -256,7 +256,7 @@ static int checktz(const char *check, size_t len)
   if(len > 4) /* longer than any valid timezone */
     return -1;
 
-  for(i = 0; i < sizeof(tz)/sizeof(tz[0]); i++) {
+  for(i = 0; i < CURL_ARRAYSIZE(tz); i++) {
     size_t ilen = strlen(what->name);
     if((ilen == len) &&
        strncasecompare(check, what->name, len))
@@ -420,7 +420,7 @@ static int parsedate(const char *date, time_t *output)
         date = end;
       }
       else {
-        size_t lval;
+        curl_off_t lval;
         int num_digits = 0;
         const char *p = date;
         if(Curl_str_number(&p, &lval, 99999999))
