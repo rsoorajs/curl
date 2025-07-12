@@ -81,7 +81,7 @@ struct tunnel_stream {
 };
 
 static CURLcode tunnel_stream_init(struct Curl_cfilter *cf,
-                                    struct tunnel_stream *ts)
+                                   struct tunnel_stream *ts)
 {
   const char *hostname;
   int port;
@@ -268,8 +268,8 @@ static int proxy_h2_client_new(struct Curl_cfilter *cf,
 }
 
 static ssize_t on_session_send(nghttp2_session *h2,
-                              const uint8_t *buf, size_t blen,
-                              int flags, void *userp);
+                               const uint8_t *buf, size_t blen,
+                               int flags, void *userp);
 static int proxy_h2_on_frame_recv(nghttp2_session *session,
                                   const nghttp2_frame *frame,
                                   void *userp);
@@ -1501,15 +1501,16 @@ static bool cf_h2_proxy_is_alive(struct Curl_cfilter *cf,
                                  bool *input_pending)
 {
   struct cf_h2_proxy_ctx *ctx = cf->ctx;
-  CURLcode result;
+  bool alive;
   struct cf_call_data save;
 
+  *input_pending = FALSE;
   CF_DATA_SAVE(save, cf, data);
-  result = (ctx && ctx->h2 && proxy_h2_connisalive(cf, data, input_pending));
+  alive = (ctx && ctx->h2 && proxy_h2_connisalive(cf, data, input_pending));
   CURL_TRC_CF(data, cf, "[0] conn alive -> %d, input_pending=%d",
-              result, *input_pending);
+              alive, *input_pending);
   CF_DATA_RESTORE(cf, save);
-  return result;
+  return alive;
 }
 
 static CURLcode cf_h2_proxy_query(struct Curl_cfilter *cf,
